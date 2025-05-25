@@ -1,131 +1,67 @@
-const fs = require('fs');
-const os = require('os');
-const path = require('path');
+const { Client, GatewayIntentBits } = require('discord.js');
+const { Configuration, OpenAIApi } = require('openai');
 const axios = require('axios');
-const FormData = require('form-data');
-const ffmpeg = require('fluent-ffmpeg');
-const mime = require('mime-types');
-const readline = require('readline');
-const { Client, GatewayIntentBits, Partials } = require('discord.js');
+const fs = require('fs');
 
-const rl = readline.createInterface({
-  input: process.stdin,
-  output: process.stdout
+if (!fs.existsSync('./config.json')) {
+  console.log('Configuração não encontrada. Rode o painel.sh antes.');
+  process.exit(1);
+}
+
+const config = JSON.parse(fs.readFileSync('./config.json', 'utf8'));
+
+const client = new Client({
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent],
 });
 
-rl.question("Token do bot: ", (botToken) => {
-  rl.question("ID do usuário pra DM: ", (userId) => {
-    rl.question("Mensagem pra mandar: ", async (mensagemDM) => {
-      rl.close();
+const openai = new OpenAIApi(new Configuration({
+  apiKey: config.openaiApiKey,
+}));
 
-      const client = new Client({
-        intents: [GatewayIntentBits.DirectMessages, GatewayIntentBits.MessageContent],
-        partials: [Partials.Channel]
+async function sendWebhook(message) {
+  try {
+    await axios.post(config.webhookUrl, { content: message });
+  } catch (e) {
+    console.error('Erro no webhook:', e.message);
+  }
+}
+
+client.once('ready', () => {
+  console.log(`Bot online: ${client.user.tag}`);
+});
+
+client.on('messageCreate', async (message) => {
+  if (message.author.bot) return;
+
+  if (message.content.toLowerCase().startsWith('!ia ')) {
+    const prompt = message.content.slice(4).trim();
+    if (!prompt) return message.reply('Manda algo pra IA responder, chefe.');
+
+    try {
+      await message.channel.sendTyping();
+
+      const response = await openai.createChatCompletion({
+        model: 'gpt-4o-mini',
+        messages: [{ role: 'user', content: prompt }],
+        max_tokens: 150,
+        temperature: 0.7,
       });
 
-      const openRouterKey = "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";
-      let userFiles = {};
+      const reply = response.data.choices[0].message.content;
+      await message.reply(reply);
+      await sendWebhook(`[IA Reply] ${message.author.tag}: ${reply}`);
+    } catch (err) {
+      console.error('Erro IA:', err.message);
+      message.reply('Erro na IA, tenta de novo depois.');
+    }
+  }
 
-      async function gerarRespostaIA(input) {
-        try {
-          const res = await axios.post("https://openrouter.ai/api/v1/chat/completions", {
-            model: "openai/gpt-3.5-turbo",
-            messages: [{ role: "user", content: input }]
-          }, {
-            headers: {
-              Authorization: `Bearer ${openRouterKey}`,
-              "Content-Type": "application/json"
-            }
-          });
-          return res.data.choices[0].message.content;
-        } catch (err) {
-          return "Erro ao conectar com a IA.";
-        }
-      }
+  if (message.content.toLowerCase() === '!ping') {
+    message.channel.send('Pong!');
+  }
+});
 
-      async function enviarArquivo(msg, filePath) {
-        const sizeMB = fs.statSync(filePath).size / 1024 / 1024;
-        if (sizeMB > 200) {
-          await msg.reply(`Arquivo muito grande (${sizeMB.toFixed(1)}MB).`);
-          fs.unlinkSync(filePath);
-          return;
-        }
-
-        if (sizeMB <= 10) {
-          await msg.reply({ files: [filePath] });
-        } else {
-          const form = new FormData();
-          form.append("reqtype", "fileupload");
-          form.append("fileToUpload", fs.createReadStream(filePath));
-          const res = await axios.post("https://catbox.moe/user/api.php", form, {
-            headers: form.getHeaders()
-          });
-          await msg.reply(`Link do arquivo: ${res.data}`);
-        }
-
-        fs.unlinkSync(filePath);
-      }
-
-      client.on('messageCreate', async (msg) => {
-        if (msg.author.bot || msg.guild) return;
-        const uid = msg.author.id;
-        const attachments = msg.attachments.map(a => a);
-
-        if (attachments.length > 0) {
-          for (const file of attachments) {
-            const mimeType = mime.lookup(file.name) || '';
-            const ext = mime.extension(mimeType);
-            const filePath = `./temp/${uid}_${Date.now()}.${ext}`;
-            const res = await axios.get(file.url, { responseType: 'stream' });
-            const writer = fs.createWriteStream(filePath);
-            res.data.pipe(writer);
-            await new Promise(r => writer.on('finish', r));
-
-            if (!userFiles[uid]) userFiles[uid] = { audio: null, video: null };
-
-            if (mimeType.startsWith('audio')) userFiles[uid].audio = filePath;
-            else if (mimeType.startsWith('video')) userFiles[uid].video = filePath;
-            else if (mimeType.startsWith('image')) {
-              await enviarArquivo(msg, filePath);
-              return;
-            }
-
-            if (userFiles[uid].audio && userFiles[uid].video) {
-              const finalPath = `./temp/final_${uid}.webm`;
-              await new Promise((resolve, reject) => {
-                ffmpeg(userFiles[uid].video).addInput(userFiles[uid].audio)
-                  .outputOptions('-c:v libvpx', '-c:a libvorbis')
-                  .save(finalPath)
-                  .on('end', resolve).on('error', reject);
-              });
-              await enviarArquivo(msg, finalPath);
-              fs.unlinkSync(userFiles[uid].audio);
-              fs.unlinkSync(userFiles[uid].video);
-              delete userFiles[uid];
-              return;
-            }
-
-            const resp = await gerarRespostaIA(`Recebi um arquivo: ${ext}. Aguardo o outro ou comando.`);
-            await msg.reply(resp);
-          }
-        } else {
-          const resposta = await gerarRespostaIA(msg.content);
-          await msg.reply(resposta);
-        }
-      });
-
-      client.once('ready', async () => {
-        console.log(`BOT ONLINE: ${client.user.username}`);
-        try {
-          const user = await client.users.fetch(userId);
-          await user.send(mensagemDM);
-          console.log("DM enviada com sucesso.");
-        } catch (err) {
-          console.log("Erro ao enviar DM:", err.message);
-        }
-      });
-
-      client.login(botToken);
-    });
-  });
+client.login(config.botToken).catch(() => {
+  console.error('Token inválido ou erro ao logar.');
+  process.exit(1);
 });
