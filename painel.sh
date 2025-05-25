@@ -1,20 +1,82 @@
-#!/data/data/com.termux/files/usr/bin/bash
-clear
-echo -e "\e[1;31m"
-figlet "DK SUPPORT BOT"
-echo -e "\e[0m"
-echo "Iniciando instalação..."
-pkg update -y && pkg upgrade -y
-pkg install nodejs -y
-pkg install ffmpeg -y
-pkg install git -y
+#!/bin/bash
 
-mkdir -p ~/dk-bot && cd ~/dk-bot
-echo "Baixando dependências..."
-npm init -y
-npm i discord.js axios form-data fluent-ffmpeg ffmpeg-static mime-types prompt-sync
+# Função de limpar e mostrar título
+title() {
+  clear
+  echo "======================================="
+  echo "         Painel de Instalação           "
+  echo "======================================="
+  echo
+}
 
-echo "Colando bot.js..."
-curl -o bot.js https://URL-DO-SEU-GIST-ou-PASTE
+# Função de loading com barra progressiva fake
+loading() {
+  local msg=$1
+  local duration=$2
+  local interval=0.1
+  local steps=$((duration / interval))
+  echo -n "$msg "
+  for ((i=0; i<=steps; i++)); do
+    sleep $interval
+    printf "\r$msg ["
+    percent=$(( i * 100 / steps ))
+    filled=$(( i * 20 / steps ))
+    empty=$((20 - filled))
+    printf '%0.s#' $(seq 1 $filled)
+    printf '%0.s-' $(seq 1 $empty)
+    printf "] %3d%%" $percent
+  done
+  echo -e "\n"
+}
 
-echo "Pronto. Use: node bot.js"
+# Função de instalar dependência npm
+install_dep() {
+  local dep=$1
+  loading "Instalando $dep..." 3
+  npm install $dep --silent
+  if [ $? -eq 0 ]; then
+    echo "$dep instalado com sucesso!"
+  else
+    echo "Erro ao instalar $dep!"
+    exit 1
+  fi
+  sleep 1
+}
+
+# Início do script
+title
+echo "Atualizando pacotes do Termux..."
+loading "Atualizando repositórios..." 2
+pkg update -y > /dev/null 2>&1
+
+echo "Instalando Node.js..."
+loading "Instalando Node.js..." 3
+pkg install nodejs -y > /dev/null 2>&1
+
+# Checa se npm tá instalado
+if ! command -v npm &> /dev/null
+then
+  echo "Erro: npm não encontrado, abortando."
+  exit 1
+fi
+
+# Instala as libs npm necessárias com estilo
+deps=("discord.js" "axios" "fluent-ffmpeg" "mime-types")
+for d in "${deps[@]}"; do
+  install_dep $d
+done
+
+title
+echo "Todas as dependências foram instaladas!"
+echo "Preparando para rodar o bot..."
+
+sleep 1
+
+# Roda o bot.js (supondo que tá no mesmo dir)
+if [ -f bot.js ]; then
+  echo "Executando bot.js..."
+  sleep 1
+  node bot.js
+else
+  echo "Arquivo bot.js não encontrado no diretório atual."
+fi
