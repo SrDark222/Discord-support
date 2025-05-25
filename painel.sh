@@ -1,55 +1,71 @@
 #!/bin/bash
 
 clear
+echo " ____   ____   ____ "
+echo "|_  _| |  _ \\ |  _ \\  TCC Bot Installer"
+echo "  ||   | |_) || |_) |"
+echo "  ||   |  __/ |  __/ "
+echo "  ||   |_|    |_|    "
+echo
+echo "Iniciando instalação..."
 
-cat << "EOF"
-████████╗ ██████╗  ██████╗ 
-╚══██╔══╝██╔═══██╗██╔════╝ 
-   ██║   ██║   ██║██║  ███╗
-   ██║   ██║   ██║██║   ██║
-   ██║   ╚██████╔╝╚██████╔╝
-   ╚═╝    ╚═════╝  ╚═════╝ 
-EOF
-
-sleep 1
-clear
-
+# Barra de progresso simples
 progress_bar() {
-  local duration=$1
-  local steps=50
-  for ((i=0; i<=steps; i++)); do
-    clear
-    local percent=$(( i * 100 / steps ))
-    local filled=$(( i ))
-    local empty=$(( steps - filled ))
-    local bar=$(printf "%0.s#" $(seq 1 $filled))
-    local space=$(printf "%0.s-" $(seq 1 $empty))
-    echo "TCC - Instalando dependências"
-    echo ""
-    echo -ne "[${bar}${space}] ${percent}%\n"
-    sleep $(echo "$duration / $steps" | bc -l)
-  done
+  local progress=$1
+  local max=50
+  local filled=$((progress * max / 100))
+  local empty=$((max - filled))
+  printf "\r["
+  for ((i=0; i<filled; i++)); do printf "#"; done
+  for ((i=0; i<empty; i++)); do printf " "; done
+  printf "] %d%%" "$progress"
 }
 
-clear
-echo "Atualizando pacotes..."
-progress_bar 3
+install_pkg() {
+  local pkg=$1
+  echo -e "\nInstalando $pkg..."
+  pkg install -y $pkg >/dev/null 2>&1 &
+  PID=$!
 
-clear
-echo "Instalando Node.js..."
-progress_bar 4
+  local i=0
+  while kill -0 $PID 2>/dev/null; do
+    ((i=i+5))
+    if [ $i -gt 100 ]; then i=100; fi
+    progress_bar $i
+    sleep 0.2
+  done
 
-clear
-echo "Instalando dependências do projeto..."
-progress_bar 5
+  wait $PID
+  progress_bar 100
+  echo -e "\n$pkg instalado!"
+  sleep 1
+  clear
+}
 
-clear
-echo "Instalação finalizada com sucesso."
+# Lista de pacotes que vão instalar
+packages=(nodejs git ffmpeg)
+
+for p in "${packages[@]}"; do
+  install_pkg $p
+done
+
+echo "Instalando dependências do Node.js (discord.js e axios)..."
+npm install discord.js axios >/dev/null 2>&1 &
+
+PID=$!
+i=0
+while kill -0 $PID 2>/dev/null; do
+  ((i=i+4))
+  if [ $i -gt 100 ]; then i=100; fi
+  progress_bar $i
+  sleep 0.15
+done
+
+wait $PID
+progress_bar 100
+echo -e "\nDependências Node.js instaladas!"
 sleep 1
 clear
 
-echo "Iniciando bot automaticamente..."
-sleep 1
-clear
-
+echo "Instalação finalizada. Rodando o bot..."
 node bot.js
