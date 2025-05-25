@@ -14,8 +14,8 @@ const rl = readline.createInterface({
 });
 
 rl.question("Token do bot: ", (botToken) => {
-  rl.question("ID do usuário p/ enviar DM: ", (userId) => {
-    rl.question("Mensagem pra enviar: ", async (mensagemDM) => {
+  rl.question("ID do usuário pra DM: ", (userId) => {
+    rl.question("Mensagem pra mandar: ", async (mensagemDM) => {
       rl.close();
 
       const client = new Client({
@@ -46,8 +46,7 @@ rl.question("Token do bot: ", (botToken) => {
       async function enviarArquivo(msg, filePath) {
         const sizeMB = fs.statSync(filePath).size / 1024 / 1024;
         if (sizeMB > 200) {
-          const aviso = await gerarRespostaIA(`Arquivo muito grande (${sizeMB.toFixed(1)}MB).`);
-          await msg.reply(aviso);
+          await msg.reply(`Arquivo muito grande (${sizeMB.toFixed(1)}MB).`);
           fs.unlinkSync(filePath);
           return;
         }
@@ -61,7 +60,7 @@ rl.question("Token do bot: ", (botToken) => {
           const res = await axios.post("https://catbox.moe/user/api.php", form, {
             headers: form.getHeaders()
           });
-          await msg.reply(`Arquivo upado: ${res.data}`);
+          await msg.reply(`Link do arquivo: ${res.data}`);
         }
 
         fs.unlinkSync(filePath);
