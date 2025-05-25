@@ -1,144 +1,123 @@
 const readline = require('readline');
-const figlet = require('figlet');
-const chalk = require('chalk');
-const { Client, GatewayIntentBits } = require('discord.js');
+const { Client, GatewayIntentBits, Partials } = require('discord.js');
+const fs = require('fs');
 const axios = require('axios');
 const FormData = require('form-data');
 const ffmpeg = require('fluent-ffmpeg');
-const fs = require('fs');
-const path = require('path');
 const mime = require('mime-types');
+const system = require('child_process');
+const path = require('path');
 
-// Mostrar título estiloso
-figlet('DK BOT', (err, data) => {
-  if (err) {
-    console.log('Erro no Figlet');
-    return startPrompt();
-  }
-  console.log(chalk.red.bold(data));
-  startPrompt();
-});
+system.execSync('clear');
 
-function startPrompt() {
-  const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout
-  });
+const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+rl.question("TOKEN DO BOT: ", (botToken) => {
+  rl.close();
 
-  rl.question(chalk.yellow('Token do bot: '), (botToken) => {
-    rl.close();
-    startBot(botToken.trim());
-  });
-}
-
-function startBot(token) {
-  console.clear();
-  console.log(chalk.green('Iniciando bot...'));
-
+  const openRouterKey = "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";
   const client = new Client({
-    intents: [
-      GatewayIntentBits.Guilds,
-      GatewayIntentBits.DirectMessages,
-      GatewayIntentBits.MessageContent,
-    ],
-    partials: ['CHANNEL']
+    intents: [GatewayIntentBits.DirectMessages, GatewayIntentBits.MessageContent],
+    partials: [Partials.Channel]
+  });
+
+  let userFiles = {};
+
+  async function gerarRespostaIA(msg) {
+    try {
+      const res = await axios.post("https://openrouter.ai/api/v1/chat/completions", {
+        model: "openai/gpt-3.5-turbo",
+        messages: [{ role: "user", content: msg }]
+      }, {
+        headers: {
+          Authorization: `Bearer ${openRouterKey}`,
+          "Content-Type": "application/json"
+        }
+      });
+      return res.data.choices[0].message.content;
+    } catch {
+      return "Erro ao gerar resposta.";
+    }
+  }
+
+  async function enviarArquivo(msg, filePath) {
+    const size = fs.statSync(filePath).size / 1024 / 1024;
+
+    if (size > 200) {
+      await msg.reply("Arquivo muito grande. Máx: 200MB.");
+      fs.unlinkSync(filePath);
+      return;
+    }
+
+    if (size <= 10) {
+      await msg.reply({ files: [filePath] });
+    } else {
+      const form = new FormData();
+      form.append('reqtype', 'fileupload');
+      form.append('fileToUpload', fs.createReadStream(filePath));
+
+      const res = await axios.post('https://catbox.moe/user/api.php', form, {
+        headers: form.getHeaders()
+      });
+
+      await msg.reply(`Arquivo grande (${size.toFixed(1)}MB): ${res.data}`);
+    }
+
+    fs.unlinkSync(filePath);
+  }
+
+  client.on('messageCreate', async (msg) => {
+    if (msg.author.bot || msg.guild) return;
+    const uid = msg.author.id;
+    const attachments = msg.attachments.map(a => a);
+
+    if (attachments.length > 0) {
+      for (const file of attachments) {
+        const mimeType = mime.lookup(file.name) || '';
+        const ext = mime.extension(mimeType);
+        const filePath = `./temp_${uid}_${Date.now()}.${ext}`;
+        const res = await axios.get(file.url, { responseType: 'stream' });
+        const writer = fs.createWriteStream(filePath);
+        res.data.pipe(writer);
+        await new Promise(resolve => writer.on('finish', resolve));
+
+        if (!userFiles[uid]) userFiles[uid] = { audio: null, video: null };
+
+        if (mimeType.startsWith('audio')) userFiles[uid].audio = filePath;
+        else if (mimeType.startsWith('video')) userFiles[uid].video = filePath;
+        else if (mimeType.startsWith('image')) {
+          await enviarArquivo(msg, filePath);
+          return;
+        }
+
+        if (userFiles[uid].audio && userFiles[uid].video) {
+          const finalPath = `./mix_${uid}.webm`;
+          await new Promise((resolve, reject) => {
+            ffmpeg(userFiles[uid].video)
+              .addInput(userFiles[uid].audio)
+              .outputOptions('-c:v libvpx', '-c:a libvorbis')
+              .save(finalPath)
+              .on('end', resolve)
+              .on('error', reject);
+          });
+
+          await enviarArquivo(msg, finalPath);
+          fs.unlinkSync(userFiles[uid].audio);
+          fs.unlinkSync(userFiles[uid].video);
+          delete userFiles[uid];
+        } else {
+          const aviso = await gerarRespostaIA(`Arquivo recebido: ${ext}. Aguardando complemento ou instrução.`);
+          await msg.reply(aviso);
+        }
+      }
+    } else if (!msg.content.startsWith('http')) {
+      const resposta = await gerarRespostaIA(msg.content);
+      await msg.reply(resposta);
+    }
   });
 
   client.once('ready', () => {
-    console.log(chalk.green.bold(`Bot online como: ${client.user.tag}`));
+    console.log(`BOT ONLINE COMO ${client.user.username}`);
   });
 
-  client.on('messageCreate', async message => {
-    if (message.author.bot) return;
-    if (message.channel.type !== 1) return; // Só DM
-
-    if (message.attachments.size > 0) {
-      console.log(chalk.cyan(`Recebido arquivo de: ${message.author.tag}`));
-      try {
-        await processAttachments(message);
-      } catch (err) {
-        console.log(chalk.red('Erro ao processar arquivo:'), err);
-        message.channel.send('Erro ao processar o arquivo.');
-      }
-    } else {
-      message.channel.send('Manda arquivo, mano.');
-    }
-  });
-
-  client.login(token);
-
-  async function processAttachments(message) {
-    for (const attachment of message.attachments.values()) {
-      const url = attachment.url;
-      const name = attachment.name || 'file';
-
-      if (!fs.existsSync(path.join(__dirname, 'temp'))) {
-        fs.mkdirSync(path.join(__dirname, 'temp'));
-      }
-
-      const filePath = path.join(__dirname, 'temp', `${Date.now()}_${name}`);
-      await downloadFile(url, filePath);
-
-      const sizeMB = attachment.size / (1024 * 1024);
-      if (sizeMB > 200) {
-        await message.channel.send('Arquivo muito pesado (>200MB), não rola processar.');
-        fs.unlinkSync(filePath);
-        return;
-      }
-
-      if (attachment.contentType?.startsWith('audio/') || attachment.contentType?.startsWith('video/')) {
-        const outputWebm = path.join(__dirname, 'temp', `${Date.now()}.webm`);
-        await convertToWebmWithAudio(filePath, outputWebm);
-        const urlUploaded = await uploadToCatbox(outputWebm);
-        await message.channel.send(`Aqui seu arquivo processado: ${urlUploaded}`);
-
-        fs.unlinkSync(filePath);
-        fs.unlinkSync(outputWebm);
-      } else if (attachment.contentType?.startsWith('image/')) {
-        await message.channel.send('Recebi uma imagem, mas ainda não rola converter.');
-        fs.unlinkSync(filePath);
-      } else {
-        await message.channel.send('Arquivo não suportado.');
-        fs.unlinkSync(filePath);
-      }
-    }
-  }
-
-  function downloadFile(url, dest) {
-    return new Promise((resolve, reject) => {
-      const writer = fs.createWriteStream(dest);
-      axios.get(url, { responseType: 'stream' }).then(response => {
-        response.data.pipe(writer);
-        writer.on('finish', resolve);
-        writer.on('error', reject);
-      }).catch(reject);
-    });
-  }
-
-  function convertToWebmWithAudio(inputPath, outputPath) {
-    return new Promise((resolve, reject) => {
-      ffmpeg(inputPath)
-        .outputOptions([
-          '-c:v libvpx-vp9',
-          '-c:a libopus',
-          '-b:v 1M',
-          '-pix_fmt yuva420p',
-          '-auto-alt-ref 0'
-        ])
-        .on('end', () => resolve())
-        .on('error', reject)
-        .save(outputPath);
-    });
-  }
-
-  async function uploadToCatbox(filePath) {
-    const form = new FormData();
-    form.append('reqtype', 'fileupload');
-    form.append('fileToUpload', fs.createReadStream(filePath));
-
-    const { data } = await axios.post('https://catbox.moe/user/api.php', form, {
-      headers: form.getHeaders()
-    });
-    return data;
-  }
-          }
+  client.login(botToken);
+});
